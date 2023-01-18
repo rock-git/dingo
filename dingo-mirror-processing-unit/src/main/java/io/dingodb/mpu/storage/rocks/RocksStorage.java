@@ -77,6 +77,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static io.dingodb.common.codec.PrimitiveCodec.encodeLong;
 import static io.dingodb.mpu.Constant.API;
@@ -132,7 +133,7 @@ public class RocksStorage implements Storage {
     private ColumnFamilyDescriptor mcfDesc;
     private ColumnFamilyDescriptor icfDesc;
 
-    private boolean destroy = false;
+    private AtomicBoolean destroy;
     private boolean disableCheckpointPurge = false;
 
     private static final int MAX_BLOOM_HASH_NUM = 10;
@@ -197,6 +198,7 @@ public class RocksStorage implements Storage {
         this.writeOptions = new WriteOptions();
         log.info("Create {} db,  ttl: {}.", label, this.ttl);
         checkPoint = Checkpoint.create(db);
+        this.destroy.set(false);
         log.info("Create rocks storage for {} success.", label);
     }
 
@@ -321,7 +323,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public void destroy() throws NullPointerException {
-        destroy = true;
+        destroy.set(true);
         this.writeOptions.close();
         closeDB();
         if (this.icfHandler != null) {
@@ -417,7 +419,7 @@ public class RocksStorage implements Storage {
      * @throws RuntimeException
      */
     public void createNewCheckpoint() {
-        if (destroy) {
+        if (destroy.get()) {
             return;
         }
         try {
@@ -467,7 +469,7 @@ public class RocksStorage implements Storage {
      * @throws RuntimeException
      */
     public void purgeOldCheckpoint(int count) {
-        if (destroy || disableCheckpointPurge) {
+        if (destroy.get() || disableCheckpointPurge) {
             return;
         }
         try {
@@ -508,7 +510,7 @@ public class RocksStorage implements Storage {
      */
     @Override
     public void applyBackup() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         try {
@@ -549,7 +551,7 @@ public class RocksStorage implements Storage {
     }
 
     public void backup() {
-        if (destroy) {
+        if (destroy.get()) {
             return;
         }
 
@@ -575,7 +577,7 @@ public class RocksStorage implements Storage {
     @Override
     public long approximateCount() {
         try {
-            if (destroy) {
+            if (destroy.get()) {
                 throw new RuntimeException();
             }
             return db.getLongProperty(dcfHandler, "rocksdb.estimate-num-keys");
@@ -586,7 +588,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public long approximateSize() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         try (
@@ -619,7 +621,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public void clearClock(long clock) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         try {
@@ -634,13 +636,16 @@ public class RocksStorage implements Storage {
 
     @Override
     public long clocked() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         if (bypassWriteDb) {
             return bypassClock;
         }
         try {
+            if (db == null || mcfHandler == null) {
+                return 0L;
+            }
             return Optional.mapOrGet(db.get(mcfHandler, CLOCK_K), PrimitiveCodec::decodeLong, () -> 0L);
         } catch (RocksDBException e) {
             throw new RuntimeException(e);
@@ -649,7 +654,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public long clock() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         try {
@@ -661,7 +666,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public void tick(long clock) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         try {
@@ -673,7 +678,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public void saveInstruction(long clock, byte[] instruction) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         if (bypassSaveInstruction) {
@@ -688,7 +693,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public byte[] reappearInstruction(long clock) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         if (bypassSaveInstruction) {
@@ -709,7 +714,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public Reader metaReader() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         return new Reader(db, mcfHandler);
@@ -717,7 +722,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public Writer metaWriter(Instruction instruction) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         return new Writer(db, instruction, dcfHandler);
@@ -725,7 +730,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public Reader reader() {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         return new Reader(db, dcfHandler);
@@ -733,7 +738,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public Writer writer(Instruction instruction) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         return new Writer(db, instruction, dcfHandler);
@@ -741,7 +746,7 @@ public class RocksStorage implements Storage {
 
     @Override
     public void flush(io.dingodb.mpu.storage.Writer writer) {
-        if (destroy) {
+        if (destroy.get()) {
             throw new RuntimeException();
         }
         if ( bypassWriteDb ) {

@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static io.dingodb.common.concurrent.Executors.execute;
 import static io.dingodb.mpu.Constant.NET;
@@ -58,7 +59,7 @@ public class VCore {
     private ControlUnit controlUnit;
     private MirrorChannel mirrorChannel;
 
-    private boolean close;
+    private AtomicBoolean close;
 
     protected List<CoreListener> listeners = new ArrayList<>();
 
@@ -77,13 +78,14 @@ public class VCore {
         this.secondMirror = secondMirror;
         this.storage = storage;
         this.executionUnit = new ExecutionUnit(this);
+        this.close.set(false);
     }
 
     public void start() {
         log.info("Start core {} on {}.", meta.label, clock());
         if (firstMirror == null && secondMirror == null) {
             log.info("Core {} start without mirror.", meta.label);
-            controlUnit = new ControlUnit(this, storage.clocked(), null, null);
+            controlUnit = new ControlUnit(this, clock(), null, null);
             primary = meta;
             notifier.notify(listeners, CoreListener.Event.PRIMARY, __ -> __.primary(clock()));
         }
@@ -98,7 +100,7 @@ public class VCore {
 
     public void close() {
         try {
-            close = true;
+            close.set(true);
             if (controlUnit != null) {
                 controlUnit.close();
             }
@@ -132,18 +134,17 @@ public class VCore {
     }
 
     public void onControlUnitClose() {
-        if (close) {
+        if (close.get()) {
             notifier.notify(listeners, CoreListener.Event.BACK, __ -> __.back(controlUnit.clock));
             return;
         }
         this.controlUnit = null;
-        long clock = clock();
         notifier.notify(listeners, CoreListener.Event.BACK, __ -> __.back(controlUnit.clock));
         selectPrimary();
     }
 
     private boolean connectPrimary(CoreMeta primary) {
-        if (close) {
+        if (close.get()) {
             return false;
         }
         try {
@@ -159,7 +160,7 @@ public class VCore {
     }
 
     public SelectReturn askPrimary(CoreMeta mirror, long clock) {
-        if (close) {
+        if (close.get()) {
             return NO;
         }
         if (controlUnit != null) {
@@ -176,7 +177,7 @@ public class VCore {
     }
 
     public void connectMirrors() {
-        if (close) {
+        if (close.get()) {
             return;
         }
         long clock = clock();
@@ -228,7 +229,7 @@ public class VCore {
     }
 
     public void selectPrimary() {
-        if (close) {
+        if (close.get()) {
             return;
         }
         log.info("{} select primary.", meta.label);
@@ -252,7 +253,7 @@ public class VCore {
     }
 
     public synchronized SelectReturn connectFromPrimary(SyncChannel syncChannel) {
-        if (close) {
+        if (close.get()) {
             return NO;
         }
         log.info(
@@ -281,7 +282,7 @@ public class VCore {
         channel.setCloseListener(ch -> {
             log.info("Mirror connection from {} closed.", syncChannel.primary.label);
             this.mirrorChannel = null;
-            notifier.notify(listeners, CoreListener.Event.LOSE_PRIMARY, __ -> __.losePrimary(close ? -1 : clock()));
+            notifier.notify(listeners, CoreListener.Event.LOSE_PRIMARY, __ -> __.losePrimary(close.get() ? -1 : clock()));
             execute(meta.label + "-select-primary", this::selectPrimary);
         });
         MirrorChannel mirrorChannel = new MirrorChannel(syncChannel.primary, this, clock(), channel);
@@ -290,7 +291,7 @@ public class VCore {
             channel.send(Message.EMPTY);
             notifier.notify(listeners, CoreListener.Event.MIRROR, __ -> __.mirror(clock));
             log.info("Connected primary {} success on {}.", syncChannel.primary.label, clock);
-            if (close) {
+            if (close.get()) {
                 mirrorChannel.close();
             }
         });
@@ -299,7 +300,7 @@ public class VCore {
 
 
     public synchronized void requestConnect(CoreMeta mirror) {
-        if (close) {
+        if (close.get()) {
             return;
         }
         log.info("Receive connect request from {}.", mirror.label);
@@ -319,7 +320,7 @@ public class VCore {
     }
 
     public boolean isAvailable() {
-        return !close && isPrimary() && !controlUnit.isClosed();
+        return !close.get() && isPrimary() && !controlUnit.isClosed();
     }
 
     public long clock() {

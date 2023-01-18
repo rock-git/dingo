@@ -23,6 +23,7 @@ import io.dingodb.mpu.instruction.Instruction;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Slf4j
@@ -44,7 +45,7 @@ class ControlUnit {
     private LinkedRunner executeRunner;
     private InstructionChain chain;
 
-    private boolean closed = false;
+    private AtomicBoolean closed;
     private final boolean extClock = false;
 
     private AtomicLong syncedClock;
@@ -63,10 +64,11 @@ class ControlUnit {
         this.executeRunner = new LinkedRunner(core.meta.label + "-execute");
         this.chain = new InstructionChain(clock, core.meta.label + "-instruction-chain");
         this.local = first == null;
+        this.closed.set(false);
     }
 
     protected void close() {
-        closed = true;
+        closed.set(true);
         log.info("{} control unit close on {}.", core.meta.label, clock);
         core.onControlUnitClose();
         if (firstChannel != null) {
@@ -79,11 +81,11 @@ class ControlUnit {
     }
 
     protected boolean isClosed() {
-        return closed;
+        return closed.get();
     }
 
     protected synchronized void onMirrorConnect(CoreMeta mirror, InstructionSyncChannel channel) {
-        if (closed) {
+        if (closed.get()) {
             throw new RuntimeException("Control unit closed.");
         }
         if (mirror.label.equals(first.label)) {
@@ -101,7 +103,7 @@ class ControlUnit {
     }
 
     protected synchronized void onMirrorClose(CoreMeta mirror) {
-        if (closed) {
+        if (closed.get()) {
             return;
         }
         log.info("{} control unit close connection {} on {}.", core.meta.label, mirror.label, clock);
